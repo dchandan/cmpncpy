@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 
-import sys
 import os
 import os.path as osp
 from netCDF4 import Dataset
@@ -114,8 +113,8 @@ def compare(file1, file2, verbose):
 
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(prog="{0}".format(__file__))
+def main():
+    parser = argparse.ArgumentParser(prog="{0}".format(osp.basename(__file__)))
 
     parser.add_argument('files', type=str, nargs=2, help="two files to compare")
     parser.add_argument('-v', action='store_true', default=False, help="verbose output")
@@ -124,4 +123,8 @@ if __name__ == "__main__":
 
     files = args.files
 
-    compare(*files, verbose=args.v)
+    compare(*files, verbose=args.v)    
+
+
+if __name__ == "__main__":
+    main()
