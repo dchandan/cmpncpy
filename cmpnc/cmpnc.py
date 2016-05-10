@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import os
+import sys
 import os.path as osp
 from netCDF4 import Dataset
 import numpy as np
@@ -159,7 +160,7 @@ def compare_variables(fname1, fname2, unlimdim, ulen, verbose):
             try:
                 assert(np.allclose(var1[Ellipsis], var2[Ellipsis]))
                 if verbose: print (PASS_MSG.format(var))
-            except AssertionError:
+            except:
                 all_okay = False
                 failed_vars.append(var)
                 if verbose: print (FAIL_MSG.format(var))
@@ -186,8 +187,10 @@ def compare_variables(fname1, fname2, unlimdim, ulen, verbose):
             if verbose: print (PASS_MSG.format(var))
 
     if not all_okay:
+        print("These variables are not the same between the two files:")
         print(failed_vars)
-        raise Exception("Variable verification failed")
+        print(bcolors.FAIL + "Files are not identical\n" + bcolors.ENDC)
+        sys.exit(1)
     else:
         if verbose:
             print(bcolors.OKGREEN + "Files seem to be identical\n" + bcolors.ENDC)
