@@ -6,7 +6,7 @@ if __name__ == "__main__":
 
     setup(name='cmpnc',
           version='1.0',
-          description="Compare two netCDF files",
+          description="Compare the data in two netCDF files",
           author="Deepak Chandan",
           author_email="dchandan@atmosp.physics.utoronto.ca",
 
@@ -32,7 +32,7 @@ if __name__ == "__main__":
 
           entry_points={
               'console_scripts': [
-                  'cmpnc = cmpnc:main',
+                  'cmpnc = cmpnc.cmpnc:main',
               ]
           },
           )
