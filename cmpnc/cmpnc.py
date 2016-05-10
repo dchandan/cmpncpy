@@ -22,8 +22,17 @@ class bcolors:
     def __init__(self, *args, **kwargs):
         pass
 
-def assert_(a, b, msg):
-    if (a != b): raise Exception(msg)
+def assert_(a, b, msg, conterr=False):
+    if (a != b): 
+        if not conterr:
+            raise Exception(msg)
+        else:
+            print(bcolors.FAIL + msg + bcolors.ENDC)
+
+
+PASS_MSG = bcolors.OKGREEN + "        PASS: " + bcolors.ENDC + "{0}"
+FAIL_MSG = bcolors.FAIL    + "        FAIL: " + bcolors.ENDC + "{0}"
+SKIP_MSG = bcolors.WARNING + "        SKIPPING: " + bcolors.ENDC + "{0}"
 
 
 def check_files_exist(file1, file2=""):
@@ -110,19 +119,65 @@ def compare_umlim_var(fname1, fname2, var, ulen, nprocs):
     return success
 
 
+def parcomp(fname1, fname2, vars_, verbose, done_queue=None):
+    """
+    A "worker" function that is called to compare a variable which has an
+    unlimited dimension between two steps along the unlimted dimension
+    Args:
+        fname1(str) : name of the first file
+        fname2(str) : name of the second file
+        vars(list)  : names of variables to compare
+        done_queue(Queue) : If supplied, then the return value is returned 
+                      through this queue
+    Returns:
+        True, if the check succeeded, False otherwise. If done_queue is present
+        then the success value is returned there instead
+    """
+    ncf1 = Dataset(fname1, "r")
+    ncf2 = Dataset(fname2, "r")
+    
+    success = True
+    failed_vars = []
+    skipped_vars = []
+    for var in vars_:
+        var1 = ncf1.variables[var]
+        var2 = ncf2.variables[var]
 
-def compare_variables(fname1, fname2, unlimdim, ulen, verbose):    
+        var_dtype = var1.dtype
+        # Checking 'non-string' variables only
+        if (var_dtype != np.dtype('S1')):
+            try:
+                assert(np.allclose(var1[Ellipsis], var2[Ellipsis]))
+                if verbose: print (PASS_MSG.format(var))
+            except:
+                success = False
+                failed_vars.append(var)
+                if verbose: print (FAIL_MSG.format(var))
+        else:
+            if verbose: print(SKIP_MSG.format(var))
+            skipped_vars.append(var)
+
+    ncf1.close()
+    ncf2.close()
+    if done_queue:
+        done_queue.put((success, failed_vars, skipped_vars))
+    else:
+        return (success, failed_vars, skipped_vars)
+
+
+
+
+def compare_variables(fname1, fname2, unlimdim, ulen, verbose, summary, conterr, nprocsg):    
     """
     Args:
         fname1(str) : name of the first file
         fname2(str) : name of the second file
         unlimdim(str): name of the unlimited dimension
         ulen(int)   : length of the unlimited dimension
-        verbose(bool) : prints output to screen if True.
+        verbose(bool) : prints output to screen if True
+        summary(bool) : if True, prints the number of variables passed/fail at the end
+        conterr(bool) : if True, then continue checking despite any errors
     """
-    PASS_MSG = bcolors.OKGREEN + "        PASS: " + bcolors.ENDC + "{0}"
-    FAIL_MSG = bcolors.FAIL + "        FAIL: " + bcolors.ENDC + "{0}"
-
     if verbose: print("Comparing Variables")
 
     ncf1 = Dataset(fname1, "r")
@@ -141,50 +196,105 @@ def compare_variables(fname1, fname2, unlimdim, ulen, verbose):
         else:
             vars_.append(varname)
 
-    assert_(len(vars1), len(vars2), "Number of variables different in files")
-    assert_(list(vars1.keys()), list(vars2.keys()), "Variables different in files")
-
-    failed_vars = []
-
-    all_okay = True
-
-    if verbose: print("    Variables without unlimited dimension:")
-    for var in vars_:
-        var1 = vars1[var]
-        var2 = vars2[var]
-
-        var_dtype = var1.dtype
-
-        # Checking 'non-string' variables only
-        if (var_dtype != np.dtype('S1')):
-            try:
-                assert(np.allclose(var1[Ellipsis], var2[Ellipsis]))
-                if verbose: print (PASS_MSG.format(var))
-            except:
-                all_okay = False
-                failed_vars.append(var)
-                if verbose: print (FAIL_MSG.format(var))
-
-        else:
-            if verbose: print ("    Skipping check for this variable")
+    assert_(len(vars1), len(vars2), "Number of variables different in files", conterr=conterr)
+    assert_(list(vars1.keys()), list(vars2.keys()), "Variables different in files", conterr=conterr)
 
     ncf1.close()
     ncf2.close()
-    
-    if verbose: print("    Variables WITH unlimited dimension:")
-    nprocs = multiprocessing.cpu_count()
-    for var in vars_u:
-        if ulen >= nprocs:
-            success = compare_umlim_var(fname1, fname2, var, ulen, nprocs)
-        else:
-            success = work(fname1, fname2, var, 0, ulen-1)
 
-        if not success:
-            all_okay = False
-            failed_vars.append(var)
-            if verbose: print (FAIL_MSG.format(var))
-        else:
-            if verbose: print (PASS_MSG.format(var))
+    failed_vars = []
+    skipped_vars = []
+    all_okay = True
+
+    # ====================================================================================
+    if verbose: print("    Variables without unlimited dimension:")
+    numvars = len(vars_)
+    # nprocs = multiprocessing.cpu_count()
+    
+    nprocs = nprocsg
+    ipp = numvars // nprocs
+    while (numvars/nprocs < 3) and (nprocs > 0):
+        nprocs //= 2
+        ipp = numvars // nprocs
+
+    done_queue = Queue()
+    procs = []
+    for i in range(nprocs):
+        sti = ipp*i
+        edi = ipp*(i+1) if (i < nprocs-1) else ipp*(i+1) + numvars%nprocs
+        procs.append(Process(target=parcomp, args=(fname1, fname2, vars_[sti:edi], verbose, done_queue)).start())
+
+    for i in range(nprocs):
+        s = done_queue.get()
+        all_okay = all_okay and s[0]
+        for item in s[1]: failed_vars.append(item)
+        for item in s[2]: skipped_vars.append(item)
+    # ====================================================================================
+
+    # ====================================================================================    
+    if verbose: print("    Variables WITH unlimited dimension:")
+    # nprocs = multiprocessing.cpu_count()
+    numvars = len(vars_u)
+    if (ulen < nprocs) and (numvars > 4):
+        # This branch means that the number of steps along the unlimited dimension
+        # is not sufficiently large enough to decompose along that dimension, but
+        # the number of variables is large enough that we can partition the variables
+        # among different processors.
+        nprocs = nprocsg
+        ipp = numvars // nprocs
+        if not ipp > 1:
+            while (numvars/nprocs < 1) and (nprocs > 0):
+                nprocs //= 2
+                ipp = numvars // nprocs
+        done_queue = Queue()
+        procs = []
+        if verbose: 
+            print(bcolors.HEADER + "Using {0} processes".format(nprocs) + bcolors.ENDC)
+        for i in range(nprocs):
+            sti = ipp*i
+            edi = ipp*(i+1) if (i < nprocs-1) else ipp*(i+1) + numvars%nprocs
+            p = Process(target=parcomp, args=(fname1, fname2, vars_u[sti:edi], verbose, done_queue))
+            procs.append(p)
+            p.start()
+
+        for i in range(nprocs):
+            s = done_queue.get()
+            all_okay = all_okay and s[0]
+            for item in s[1]: failed_vars.append(item)
+            for item in s[2]: skipped_vars.append(item)
+
+        for p in procs:
+            p.join()        
+
+    else:
+        for var in vars_u:
+            if ulen >= nprocs:
+                # If there are enough steps in the unlimited dimensions then lets paritiion
+                # along that dimension
+                success = compare_umlim_var(fname1, fname2, var, ulen, nprocs)
+            else:
+                # Just serially compare the variables.....
+                success = work(fname1, fname2, var, 0, ulen-1)
+
+            if not success:
+                all_okay = False
+                failed_vars.append(var)
+                if verbose: print (FAIL_MSG.format(var))
+            else:
+                if verbose: print (PASS_MSG.format(var))
+    # ====================================================================================
+    nvars    = len(vars_) + len(vars_u)
+    nfailed  = len(failed_vars)
+    nskipped = len(skipped_vars)
+    npassed  = nvars - nfailed - nskipped
+
+    if summary:
+        print("SUMMARY")
+        print("File 1 : {0}".format(fname1))
+        print("File 2 : {0}".format(fname2))
+        print("Number of variables passed : {0}".format(npassed))
+        print("Number of variables failed : {0}".format(nfailed))
+        print("Number of variables skipped: {0}\n".format(nskipped))
 
     if not all_okay:
         print("These variables are not the same between the two files:")
@@ -196,21 +306,24 @@ def compare_variables(fname1, fname2, unlimdim, ulen, verbose):
             print(bcolors.OKGREEN + "Files seem to be identical\n" + bcolors.ENDC)
 
 
-def compare_dimensions(dims1, dims2, verbose):
+
+
+def compare_dimensions(dims1, dims2, verbose, conterr):
     """
     Compare the dimensions from the two variables.
     Args:
         dims1, dims2: dimensions from the two files
-        verbose: if True, produce more output
+        verbose(bool) : if True, produce more output
+        conterr(bool) : if True, then continue checking despite any errors
     """
-    assert_(len(dims1), len(dims2), "Number of dimensions different in files")
-    assert_(list(dims1.keys()), list(dims2.keys()), "Dimensions in files different")
+    assert_(len(dims1), len(dims2), "Number of dimensions different in files", conterr=conterr)
+    assert_(list(dims1.keys()), list(dims2.keys()), "Dimensions in files different", conterr=conterr)
     if verbose: 
         print("Comparing Dimensions")
         print(("  Both files have {0} dimensions".format(len(dims1))))
         
     for k in list(dims1.keys()):
-        assert_(len(dims1[k]), len(dims2[k]), "Lengths not same for dimension {0}".format(k))
+        assert_(len(dims1[k]), len(dims2[k]), "Lengths not same for dimension {0}".format(k), conterr=conterr)
         if verbose: print(("  Dimension {0} same".format(k)))
 
 
@@ -223,21 +336,21 @@ def get_unlim_dimension(dimensions):
 
 
 
-def compare_attributes(ncf1, ncf2, verbose):
+def compare_attributes(ncf1, ncf2, verbose, conterr):
     att1 = ncf1.ncattrs()
     att2 = ncf2.ncattrs()
-    assert_(len(att1), len(att2), "Number of attributes different")
-    assert_(att1, att2, "Attributes different in files")
+    assert_(len(att1), len(att2), "Number of attributes different", conterr=conterr)
+    assert_(att1, att2, "Attributes different in files", conterr=conterr)
     if verbose: 
         print("Comparing Attributes")
         print(("  Both files have {0} attributes".format(len(att1))))
 
     for att in att1:
-        assert_(getattr(ncf1, att), getattr(ncf2, att), "Attribute {0} different in files".format(att))
+        assert_(getattr(ncf1, att), getattr(ncf2, att), "Attribute {0} different in files".format(att), conterr=conterr)
         if verbose: print(("  Attribute {0} same".format(att)))
 
 
-def compare(file1, file2, verbose):
+def start_compare(file1, file2, verbose, summary, conterr, nprocs):
     check_files_exist(file1, file2)
 
     ncf1 = Dataset(file1, "r")
@@ -250,13 +363,13 @@ def compare(file1, file2, verbose):
     ulen = len(ncf1.dimensions[unlimdim])
     if verbose: print("Found unlimited dimension {0} of length {1}".format(unlimdim, ulen))
 
-    compare_dimensions(dims1, dims2, verbose)
-    compare_attributes(ncf1, ncf2, verbose)
+    compare_dimensions(dims1, dims2, verbose, conterr)
+    compare_attributes(ncf1, ncf2, verbose, conterr)
 
     ncf1.close()
     ncf2.close()
 
-    compare_variables(file1, file2, unlimdim, ulen, verbose)
+    compare_variables(file1, file2, unlimdim, ulen, verbose, summary, conterr, nprocs)
 
 
 def main():
@@ -264,12 +377,15 @@ def main():
 
     parser.add_argument('files', type=str, nargs=2, help="two files to compare")
     parser.add_argument('-v', action='store_true', default=False, help="verbose output")
+    parser.add_argument('-s', action='store_true', default=False, help="print summary")
+    parser.add_argument('-k', action='store_true', default=False, help="continue with errors")
+    parser.add_argument('-n', type=int, default=multiprocessing.cpu_count(), help="number of processes to use")
 
     args = parser.parse_args()
 
     files = args.files
 
-    compare(*files, verbose=args.v)    
+    start_compare(*files, verbose=args.v, summary=args.s, conterr=args.k, nprocs=args.n)    
 
 
 if __name__ == "__main__":
