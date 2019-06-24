@@ -1,11 +1,22 @@
 #!/usr/bin/env python
 
+import re
 from setuptools import find_packages, setup
 
 if __name__ == "__main__":
 
+    VERSIONFILE = "cmpnc/_version.py"
+    verstrline = open(VERSIONFILE, "rt").read()
+    VSRE = r"^__version__ = ['\"]([^'\"]*)['\"]"
+    mo = re.search(VSRE, verstrline, re.M)
+    if mo:
+        verstr = mo.group(1)
+    else:
+        raise RuntimeError("Unable to find version string in %s." % (VERSIONFILE,))
+
+
     setup(name='cmpnc',
-          version='1.0',
+          version=verstr,
           description="Compare the data in two netCDF files",
           author="Deepak Chandan",
           author_email="dchandan@atmosp.physics.utoronto.ca",
@@ -19,11 +30,6 @@ if __name__ == "__main__":
 
               'Intended Audience :: Scientists',
 
-              'Programming Language :: Python :: 2.7',
-              'Programming Language :: Python :: 3',
-              'Programming Language :: Python :: 3.2',
-              'Programming Language :: Python :: 3.3',
-              'Programming Language :: Python :: 3.4',
               'Programming Language :: Python :: 3.5',
           ],
 
